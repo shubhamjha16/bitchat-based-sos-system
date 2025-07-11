@@ -2072,6 +2072,84 @@ class BluetoothMeshService: NSObject {
                 self.broadcastPacket(relayPacket)
             }
             
+        case .sosMessage:
+            // Handle SOS message
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) {
+                // Ignore our own SOS messages
+                if senderID == myPeerID {
+                    return
+                }
+                
+                // Try to decode the SOS message
+                if let message = BitchatMessage.fromBinaryPayload(packet.payload),
+                   let sosMessage = message.sosMessage {
+                    
+                    // Notify delegate of SOS message
+                    DispatchQueue.main.async {
+                        self.delegate?.didReceiveSOSMessage(sosMessage)
+                    }
+                }
+                
+                // Relay with high priority due to emergency nature
+                if packet.ttl > 0 {
+                    var relayPacket = packet
+                    relayPacket.ttl -= 1
+                    self.broadcastPacket(relayPacket)
+                }
+            }
+            
+        case .sosResponse:
+            // Handle SOS response
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) {
+                // Ignore our own responses
+                if senderID == myPeerID {
+                    return
+                }
+                
+                // Try to decode the SOS response
+                if let message = BitchatMessage.fromBinaryPayload(packet.payload),
+                   let sosResponse = message.sosResponse {
+                    
+                    // Notify delegate of SOS response
+                    DispatchQueue.main.async {
+                        self.delegate?.didReceiveSOSResponse(sosResponse)
+                    }
+                }
+                
+                // Relay response
+                if packet.ttl > 0 {
+                    var relayPacket = packet
+                    relayPacket.ttl -= 1
+                    self.broadcastPacket(relayPacket)
+                }
+            }
+            
+        case .emergencyServiceAnnounce:
+            // Handle emergency service announcement
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) {
+                // Ignore our own announcements
+                if senderID == myPeerID {
+                    return
+                }
+                
+                // Try to decode the emergency service announcement
+                if let message = BitchatMessage.fromBinaryPayload(packet.payload),
+                   let announcement = message.emergencyServiceAnnouncement {
+                    
+                    // Notify delegate of emergency service
+                    DispatchQueue.main.async {
+                        self.delegate?.didReceiveEmergencyServiceAnnouncement(announcement)
+                    }
+                }
+                
+                // Relay announcement
+                if packet.ttl > 0 {
+                    var relayPacket = packet
+                    relayPacket.ttl -= 1
+                    self.broadcastPacket(relayPacket)
+                }
+            }
+            
         default:
             break
         }
@@ -2929,5 +3007,162 @@ extension BluetoothMeshService: CBPeripheralManagerDelegate {
     
     private func updatePeerLastSeen(_ peerID: String) {
         peerLastSeenTimestamps[peerID] = Date()
+    }
+    
+    // MARK: - SOS Message Methods
+    
+    func sendSOSMessage(_ sosMessage: SOSMessage, from senderID: String) {
+        messageQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let message = BitchatMessage(sosMessage: sosMessage, sender: sosMessage.senderName, senderPeerID: senderID)
+            
+            if let messageData = message.toBinaryPayload() {
+                let signature: Data?
+                do {
+                    signature = try self.encryptionService.sign(messageData)
+                } catch {
+                    signature = nil
+                }
+                
+                // Use higher TTL for SOS messages based on urgency
+                let sosTTL = sosMessage.urgency == .critical ? UInt8(10) : UInt8(8)
+                
+                let packet = BitchatPacket(
+                    type: MessageType.sosMessage.rawValue,
+                    senderID: Data(senderID.utf8),
+                    recipientID: SpecialRecipients.broadcast,
+                    timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+                    payload: messageData,
+                    signature: signature,
+                    ttl: sosTTL
+                )
+                
+                // SOS messages get priority treatment
+                self.sendPacketWithPriority(packet, priority: .high)
+            }
+        }
+    }
+    
+    func sendSOSResponse(_ sosResponse: SOSResponse, from senderID: String) {
+        messageQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let message = BitchatMessage(sosResponse: sosResponse, sender: sosResponse.responderName, senderPeerID: senderID)
+            
+            if let messageData = message.toBinaryPayload() {
+                let signature: Data?
+                do {
+                    signature = try self.encryptionService.sign(messageData)
+                } catch {
+                    signature = nil
+                }
+                
+                let packet = BitchatPacket(
+                    type: MessageType.sosResponse.rawValue,
+                    senderID: Data(senderID.utf8),
+                    recipientID: SpecialRecipients.broadcast,
+                    timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+                    payload: messageData,
+                    signature: signature,
+                    ttl: UInt8(7) // Standard TTL for responses
+                )
+                
+                self.sendPacketWithPriority(packet, priority: .medium)
+            }
+        }
+    }
+    
+    func sendEmergencyServiceAnnouncement(_ announcement: EmergencyServiceAnnouncement, from senderID: String) {
+        messageQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let message = BitchatMessage(
+                emergencyServiceAnnouncement: announcement,
+                sender: announcement.serviceName,
+                senderPeerID: senderID
+            )
+            
+            if let messageData = message.toBinaryPayload() {
+                let signature: Data?
+                do {
+                    signature = try self.encryptionService.sign(messageData)
+                } catch {
+                    signature = nil
+                }
+                
+                let packet = BitchatPacket(
+                    type: MessageType.emergencyServiceAnnounce.rawValue,
+                    senderID: Data(senderID.utf8),
+                    recipientID: SpecialRecipients.broadcast,
+                    timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+                    payload: messageData,
+                    signature: signature,
+                    ttl: UInt8(5) // Moderate TTL for service announcements
+                )
+                
+                self.sendPacketWithPriority(packet, priority: .low)
+            }
+        }
+    }
+    
+    func sendSOSDeactivation(_ sosID: String, from senderID: String) {
+        messageQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let nickname = self.delegate as? ChatViewModel
+            let senderNick = nickname?.nickname ?? self.myPeerID
+            
+            let message = BitchatMessage(
+                sender: senderNick,
+                content: "🆘 RESOLVED: \(sosID)",
+                timestamp: Date(),
+                isRelay: false,
+                senderPeerID: senderID
+            )
+            
+            if let messageData = message.toBinaryPayload() {
+                let signature: Data?
+                do {
+                    signature = try self.encryptionService.sign(messageData)
+                } catch {
+                    signature = nil
+                }
+                
+                let packet = BitchatPacket(
+                    type: MessageType.message.rawValue,
+                    senderID: Data(senderID.utf8),
+                    recipientID: SpecialRecipients.broadcast,
+                    timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+                    payload: messageData,
+                    signature: signature,
+                    ttl: UInt8(8) // Higher TTL for resolution notifications
+                )
+                
+                self.sendPacketWithPriority(packet, priority: .high)
+            }
+        }
+    }
+    
+    // Priority levels for message sending
+    enum MessagePriority {
+        case low
+        case medium
+        case high
+    }
+    
+    private func sendPacketWithPriority(_ packet: BitchatPacket, priority: MessagePriority) {
+        // For now, we'll use the standard sending mechanism
+        // In a more advanced implementation, we could maintain separate queues
+        // for different priority levels
+        guard let data = packet.toBinaryData() else { return }
+        
+        let shouldSend = !processedMessages.contains(packet.senderID.hexEncodedString() + "-" + String(packet.timestamp))
+        if shouldSend {
+            processedMessages.insert(packet.senderID.hexEncodedString() + "-" + String(packet.timestamp))
+            
+            // Send to all connected peers
+            sendToAllPeers(data)
+        }
     }
 }

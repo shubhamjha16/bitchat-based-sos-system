@@ -227,7 +227,8 @@ extension BitchatMessage {
         var data = Data()
         
         // Message format:
-        // - Flags: 1 byte (bit 0: isRelay, bit 1: isPrivate, bit 2: hasOriginalSender, bit 3: hasRecipientNickname, bit 4: hasSenderPeerID, bit 5: hasMentions, bit 6: hasChannel, bit 7: isEncrypted)
+        // - Flags: 2 bytes (first byte: bit 0: isRelay, bit 1: isPrivate, bit 2: hasOriginalSender, bit 3: hasRecipientNickname, bit 4: hasSenderPeerID, bit 5: hasMentions, bit 6: hasChannel, bit 7: isEncrypted)
+        // - Flags2: 2nd byte (bit 0: hasSOS, bit 1: hasSOSResponse, bit 2: hasEmergencyService)
         // - Timestamp: 8 bytes (seconds since epoch)
         // - ID length: 1 byte
         // - ID: variable
@@ -241,6 +242,9 @@ extension BitchatMessage {
         // - Sender peer ID length + data
         // - Mentions array
         // - Channel hashtag
+        // - SOS message data
+        // - SOS response data  
+        // - Emergency service announcement data
         
         var flags: UInt8 = 0
         if isRelay { flags |= 0x01 }
@@ -252,7 +256,13 @@ extension BitchatMessage {
         if channel != nil { flags |= 0x40 }
         if isEncrypted { flags |= 0x80 }
         
+        var flags2: UInt8 = 0
+        if sosMessage != nil { flags2 |= 0x01 }
+        if sosResponse != nil { flags2 |= 0x02 }
+        if emergencyServiceAnnouncement != nil { flags2 |= 0x04 }
+        
         data.append(flags)
+        data.append(flags2)
         
         // Timestamp (in milliseconds)
         let timestampMillis = UInt64(timestamp.timeIntervalSince1970 * 1000)
@@ -329,6 +339,42 @@ extension BitchatMessage {
             data.append(channelData.prefix(255))
         }
         
+        // SOS message data
+        if let sosMessage = sosMessage {
+            if let sosData = try? JSONEncoder().encode(sosMessage) {
+                let length = UInt16(min(sosData.count, 65535))
+                data.append(UInt8((length >> 8) & 0xFF))
+                data.append(UInt8(length & 0xFF))
+                data.append(sosData.prefix(Int(length)))
+            } else {
+                data.append(contentsOf: [0, 0])
+            }
+        }
+        
+        // SOS response data
+        if let sosResponse = sosResponse {
+            if let responseData = try? JSONEncoder().encode(sosResponse) {
+                let length = UInt16(min(responseData.count, 65535))
+                data.append(UInt8((length >> 8) & 0xFF))
+                data.append(UInt8(length & 0xFF))
+                data.append(responseData.prefix(Int(length)))
+            } else {
+                data.append(contentsOf: [0, 0])
+            }
+        }
+        
+        // Emergency service announcement data
+        if let emergencyServiceAnnouncement = emergencyServiceAnnouncement {
+            if let serviceData = try? JSONEncoder().encode(emergencyServiceAnnouncement) {
+                let length = UInt16(min(serviceData.count, 65535))
+                data.append(UInt8((length >> 8) & 0xFF))
+                data.append(UInt8(length & 0xFF))
+                data.append(serviceData.prefix(Int(length)))
+            } else {
+                data.append(contentsOf: [0, 0])
+            }
+        }
+        
         return data
     }
     
@@ -337,7 +383,7 @@ extension BitchatMessage {
         let dataCopy = Data(data)
         
         
-        guard dataCopy.count >= 13 else { 
+        guard dataCopy.count >= 14 else {  // Updated to account for flags2 byte
             return nil 
         }
         
@@ -356,6 +402,15 @@ extension BitchatMessage {
         let hasMentions = (flags & 0x20) != 0
         let hasChannel = (flags & 0x40) != 0
         let isEncrypted = (flags & 0x80) != 0
+        
+        // Flags2
+        guard offset < dataCopy.count else { 
+            return nil 
+        }
+        let flags2 = dataCopy[offset]; offset += 1
+        let hasSOS = (flags2 & 0x01) != 0
+        let hasSOSResponse = (flags2 & 0x02) != 0
+        let hasEmergencyService = (flags2 & 0x04) != 0
         
         // Timestamp
         guard offset + 8 <= dataCopy.count else { 
@@ -475,6 +530,51 @@ extension BitchatMessage {
             }
         }
         
+        // SOS message data
+        var sosMessage: SOSMessage?
+        if hasSOS && offset + 2 <= dataCopy.count {
+            let sosLengthData = dataCopy[offset..<offset+2]
+            let sosLength = Int(sosLengthData.reduce(0) { result, byte in
+                (result << 8) | UInt16(byte)
+            })
+            offset += 2
+            if offset + sosLength <= dataCopy.count {
+                let sosData = dataCopy[offset..<offset+sosLength]
+                sosMessage = try? JSONDecoder().decode(SOSMessage.self, from: sosData)
+                offset += sosLength
+            }
+        }
+        
+        // SOS response data
+        var sosResponse: SOSResponse?
+        if hasSOSResponse && offset + 2 <= dataCopy.count {
+            let responseLengthData = dataCopy[offset..<offset+2]
+            let responseLength = Int(responseLengthData.reduce(0) { result, byte in
+                (result << 8) | UInt16(byte)
+            })
+            offset += 2
+            if offset + responseLength <= dataCopy.count {
+                let responseData = dataCopy[offset..<offset+responseLength]
+                sosResponse = try? JSONDecoder().decode(SOSResponse.self, from: responseData)
+                offset += responseLength
+            }
+        }
+        
+        // Emergency service announcement data
+        var emergencyServiceAnnouncement: EmergencyServiceAnnouncement?
+        if hasEmergencyService && offset + 2 <= dataCopy.count {
+            let serviceLengthData = dataCopy[offset..<offset+2]
+            let serviceLength = Int(serviceLengthData.reduce(0) { result, byte in
+                (result << 8) | UInt16(byte)
+            })
+            offset += 2
+            if offset + serviceLength <= dataCopy.count {
+                let serviceData = dataCopy[offset..<offset+serviceLength]
+                emergencyServiceAnnouncement = try? JSONDecoder().decode(EmergencyServiceAnnouncement.self, from: serviceData)
+                offset += serviceLength
+            }
+        }
+        
         let message = BitchatMessage(
             id: id,
             sender: sender,
@@ -488,7 +588,10 @@ extension BitchatMessage {
             mentions: mentions,
             channel: channel,
             encryptedContent: encryptedContent,
-            isEncrypted: isEncrypted
+            isEncrypted: isEncrypted,
+            sosMessage: sosMessage,
+            sosResponse: sosResponse,
+            emergencyServiceAnnouncement: emergencyServiceAnnouncement
         )
         return message
     }
