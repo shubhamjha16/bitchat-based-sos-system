@@ -35,6 +35,10 @@
 	<string>bitchat uses Bluetooth to create a secure mesh network for chatting with nearby users.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>bitchat uses Bluetooth to discover and connect with other bitchat users nearby.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>bitchat uses location services to include your location in emergency SOS messages to help responders find you.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>bitchat uses location services to include your location in emergency SOS messages to help responders find you.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UISupportedInterfaceOrientations</key>
