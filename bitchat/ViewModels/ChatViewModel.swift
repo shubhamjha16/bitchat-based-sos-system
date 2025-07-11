@@ -51,6 +51,18 @@ class ChatViewModel: ObservableObject {
     @Published var savedChannels: Set<String> = []  // Channels saved for message retention
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
+    // SOS-related properties
+    @Published var sosMessages: [SOSMessage] = []
+    @Published var sosResponses: [SOSResponse] = []
+    @Published var emergencyServices: [EmergencyServiceAnnouncement] = []
+    @Published var showSOSInterface: Bool = false
+    @Published var isEmergencyServiceProvider: Bool = false
+    @Published var activeSOSAlerts: [SOSMessage] = []
+    
+    // Services
+    private let sosService = SOSService.shared
+    private let locationService = LocationService.shared
+    
     let meshService = BluetoothMeshService()
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
@@ -82,6 +94,9 @@ class ChatViewModel: ObservableObject {
         // Load saved channels state
         savedChannels = MessageRetentionService.shared.getFavoriteChannels()
         meshService.delegate = self
+        
+        // Initialize SOS service subscriptions
+        initializeSOSSubscriptions()
         
         // Log startup info
         
@@ -1471,6 +1486,11 @@ class ChatViewModel: ObservableObject {
         let primaryColor = isDark ? Color.green : Color(red: 0, green: 0.5, blue: 0)
         let secondaryColor = primaryColor.opacity(0.7)
         
+        // Check if this is an SOS message and format differently
+        if message.isEmergency {
+            return formatEmergencyMessage(message, colorScheme: colorScheme)
+        }
+        
         // Timestamp
         let timestamp = AttributedString("[\(formatTimestamp(message.timestamp))] ")
         var timestampStyle = AttributeContainer()
@@ -1604,6 +1624,61 @@ class ChatViewModel: ObservableObject {
             contentStyle.font = .system(size: 12, design: .monospaced).italic()
             result.append(content.mergingAttributes(contentStyle))
         }
+        
+        return result
+    }
+    
+    func formatEmergencyMessage(_ message: BitchatMessage, colorScheme: ColorScheme) -> AttributedString {
+        var result = AttributedString()
+        
+        let isDark = colorScheme == .dark
+        let urgentColor = Color.red
+        let emergencyColor = isDark ? Color.red : Color.red
+        
+        // Timestamp with urgent coloring
+        let timestamp = AttributedString("[\(formatTimestamp(message.timestamp))] ")
+        var timestampStyle = AttributeContainer()
+        timestampStyle.foregroundColor = urgentColor
+        timestampStyle.font = .system(size: 12, weight: .bold, design: .monospaced)
+        result.append(timestamp.mergingAttributes(timestampStyle))
+        
+        // Emergency prefix
+        let emergencyPrefix = AttributedString("🚨 EMERGENCY 🚨 ")
+        var emergencyStyle = AttributeContainer()
+        emergencyStyle.foregroundColor = urgentColor
+        emergencyStyle.font = .system(size: 14, weight: .bold, design: .monospaced)
+        result.append(emergencyPrefix.mergingAttributes(emergencyStyle))
+        
+        // Sender
+        let sender = AttributedString("<@\(message.sender)> ")
+        var senderStyle = AttributeContainer()
+        senderStyle.foregroundColor = emergencyColor
+        senderStyle.font = .system(size: 14, weight: .bold, design: .monospaced)
+        result.append(sender.mergingAttributes(senderStyle))
+        
+        // Content - check what type of emergency message
+        var content = AttributedString()
+        if let sosMessage = message.sosMessage {
+            // Format SOS message
+            let sosContent = formatSOSMessage(sosMessage)
+            content = AttributedString(sosContent)
+        } else if let sosResponse = message.sosResponse {
+            // Format SOS response
+            let responseContent = formatSOSResponse(sosResponse)
+            content = AttributedString(responseContent)
+        } else if let serviceAnnouncement = message.emergencyServiceAnnouncement {
+            // Format emergency service announcement
+            let serviceContent = "🚑 Emergency Service: \(serviceAnnouncement.serviceName) - \(serviceAnnouncement.serviceType.displayName)"
+            content = AttributedString(serviceContent)
+        } else {
+            // Fallback to regular content
+            content = AttributedString(message.content)
+        }
+        
+        var contentStyle = AttributeContainer()
+        contentStyle.foregroundColor = emergencyColor
+        contentStyle.font = .system(size: 14, weight: .medium, design: .monospaced)
+        result.append(content.mergingAttributes(contentStyle))
         
         return result
     }
@@ -3133,4 +3208,281 @@ extension ChatViewModel: BitchatDelegate {
         }
     }
     
+    // MARK: - SOS Delegate Methods
+    
+    func didReceiveSOSMessage(_ sosMessage: SOSMessage) {
+        // Add to SOS service
+        sosService.receiveSOSMessage(sosMessage)
+        
+        // Create BitchatMessage and add to messages
+        let message = BitchatMessage(sosMessage: sosMessage, sender: sosMessage.senderName, senderPeerID: sosMessage.senderID)
+        messages.append(message)
+        
+        // Show notification for critical SOS messages
+        if sosMessage.urgency == .critical {
+            NotificationService.shared.showSOSNotification(sosMessage)
+        }
+        
+        // Force UI update
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+    
+    func didReceiveSOSResponse(_ sosResponse: SOSResponse) {
+        // Add to SOS service
+        sosService.receiveSOSResponse(sosResponse)
+        
+        // Create BitchatMessage and add to messages
+        let message = BitchatMessage(sosResponse: sosResponse, sender: sosResponse.responderName, senderPeerID: sosResponse.responderID)
+        messages.append(message)
+        
+        // Show notification if this is a response to our SOS
+        if let originalSOS = sosService.getSOSMessage(by: sosResponse.originalSOSID),
+           originalSOS.senderID == meshService.myPeerID {
+            NotificationService.shared.showSOSResponseNotification(sosResponse)
+        }
+        
+        // Force UI update
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+    
+    func didReceiveEmergencyServiceAnnouncement(_ announcement: EmergencyServiceAnnouncement) {
+        // Add to SOS service
+        sosService.receiveEmergencyServiceAnnouncement(announcement)
+        
+        // Create BitchatMessage and add to messages
+        let message = BitchatMessage(
+            emergencyServiceAnnouncement: announcement,
+            sender: announcement.serviceName,
+            senderPeerID: announcement.serviceID
+        )
+        messages.append(message)
+        
+        // Force UI update
+        DispatchQueue.main.async { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+    
+    // MARK: - SOS Methods
+    
+    private func initializeSOSSubscriptions() {
+        // Subscribe to SOS service updates
+        sosService.$activeSOSMessages
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] sosMessages in
+                self?.sosMessages = sosMessages
+                self?.activeSOSAlerts = sosMessages.filter { $0.isActive }
+            }
+            .store(in: &cancellables)
+        
+        sosService.$sosResponses
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] responses in
+                self?.sosResponses = responses
+            }
+            .store(in: &cancellables)
+        
+        sosService.$emergencyServices
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] services in
+                self?.emergencyServices = services
+            }
+            .store(in: &cancellables)
+        
+        sosService.$isEmergencyServiceProvider
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isProvider in
+                self?.isEmergencyServiceProvider = isProvider
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - SOS Message Methods
+    
+    func sendSOSMessage(
+        type: SOSType,
+        urgency: UrgencyLevel,
+        description: String,
+        includeLocation: Bool = true,
+        contactInfo: String? = nil,
+        additionalInfo: [String: String]? = nil
+    ) {
+        Task {
+            let sosMessage = await sosService.createSOSMessage(
+                type: type,
+                urgency: urgency,
+                description: description,
+                senderName: nickname,
+                senderID: meshService.myPeerID,
+                includeLocation: includeLocation,
+                contactInfo: contactInfo,
+                additionalInfo: additionalInfo
+            )
+            
+            // Create BitchatMessage with SOS content
+            let message = BitchatMessage(sosMessage: sosMessage, sender: nickname, senderPeerID: meshService.myPeerID)
+            
+            // Add to messages
+            DispatchQueue.main.async {
+                self.messages.append(message)
+            }
+            
+            // Send via mesh network with high priority
+            meshService.sendSOSMessage(sosMessage, from: meshService.myPeerID)
+        }
+    }
+    
+    func respondToSOS(
+        sosID: String,
+        responseType: ResponseType,
+        message: String,
+        eta: Date? = nil,
+        capabilities: [String]? = nil
+    ) {
+        let sosResponse = sosService.createSOSResponse(
+            originalSOSID: sosID,
+            responderName: nickname,
+            responderID: meshService.myPeerID,
+            responseType: responseType,
+            message: message,
+            eta: eta,
+            capabilities: capabilities
+        )
+        
+        // Create BitchatMessage with SOS response
+        let responseMessage = BitchatMessage(sosResponse: sosResponse, sender: nickname, senderPeerID: meshService.myPeerID)
+        
+        // Add to messages
+        messages.append(responseMessage)
+        
+        // Send via mesh network
+        meshService.sendSOSResponse(sosResponse, from: meshService.myPeerID)
+    }
+    
+    func announceEmergencyService(
+        serviceType: SOSType,
+        serviceName: String,
+        capabilities: [String] = [],
+        contactInfo: String? = nil
+    ) {
+        Task {
+            await sosService.enableEmergencyService(
+                serviceType: serviceType,
+                serviceName: serviceName,
+                serviceID: meshService.myPeerID,
+                capabilities: capabilities,
+                contactInfo: contactInfo
+            )
+            
+            // Get the created announcement
+            if let announcement = sosService.myEmergencyServices.last {
+                let announcementMessage = BitchatMessage(
+                    emergencyServiceAnnouncement: announcement,
+                    sender: nickname,
+                    senderPeerID: meshService.myPeerID
+                )
+                
+                // Add to messages
+                DispatchQueue.main.async {
+                    self.messages.append(announcementMessage)
+                }
+                
+                // Send via mesh network
+                meshService.sendEmergencyServiceAnnouncement(announcement, from: meshService.myPeerID)
+            }
+        }
+    }
+    
+    func deactivateSOSMessage(_ sosID: String) {
+        sosService.deactivateSOSMessage(sosID)
+        
+        // Send deactivation message via mesh network
+        meshService.sendSOSDeactivation(sosID, from: meshService.myPeerID)
+        
+        // Add system message
+        let systemMessage = BitchatMessage(
+            sender: "system",
+            content: "🆘 Emergency resolved: \(sosID)",
+            timestamp: Date(),
+            isRelay: false
+        )
+        messages.append(systemMessage)
+    }
+    
+    func getSOSMessage(by id: String) -> SOSMessage? {
+        return sosService.getSOSMessage(by: id)
+    }
+    
+    func getResponsesForSOS(_ sosID: String) -> [SOSResponse] {
+        return sosService.getResponsesForSOS(sosID)
+    }
+    
+    func getEmergencyServicesForType(_ type: SOSType) -> [EmergencyServiceAnnouncement] {
+        return sosService.getEmergencyServicesForType(type)
+    }
+    
+    func getNearbyEmergencyServices() -> [EmergencyServiceAnnouncement] {
+        guard let currentLocation = locationService.currentLocation else {
+            return []
+        }
+        return sosService.getNearbyEmergencyServices(currentLocation)
+    }
+    
+    func toggleSOSInterface() {
+        showSOSInterface.toggle()
+    }
+    
+    func getSOSMessagePriority(_ sosMessage: SOSMessage) -> Int {
+        return sosService.getSOSMessagePriority(sosMessage)
+    }
+    
+    func formatSOSMessage(_ sosMessage: SOSMessage) -> String {
+        var formatted = "\(sosMessage.type.emoji) \(sosMessage.type.displayName)\n"
+        formatted += "Urgency: \(sosMessage.urgency.displayName)\n"
+        formatted += "Description: \(sosMessage.description)\n"
+        
+        if let location = sosMessage.location {
+            formatted += "Location: \(locationService.formatLocation(location))\n"
+        }
+        
+        if let contactInfo = sosMessage.contactInfo {
+            formatted += "Contact: \(contactInfo)\n"
+        }
+        
+        formatted += "Time: \(formatTimestamp(sosMessage.timestamp))\n"
+        formatted += "From: \(sosMessage.senderName)"
+        
+        return formatted
+    }
+    
+    func formatSOSResponse(_ sosResponse: SOSResponse) -> String {
+        var formatted = "\(sosResponse.responseType.emoji) \(sosResponse.responseType.displayName)\n"
+        formatted += "Response: \(sosResponse.message)\n"
+        
+        if let eta = sosResponse.eta {
+            formatted += "ETA: \(formatTimestamp(eta))\n"
+        }
+        
+        if let capabilities = sosResponse.capabilities, !capabilities.isEmpty {
+            formatted += "Capabilities: \(capabilities.joined(separator: ", "))\n"
+        }
+        
+        formatted += "From: \(sosResponse.responderName)"
+        
+        return formatted
+    }
+    
+    private func formatTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+    
+    private var cancellables = Set<AnyCancellable>()
+
 }

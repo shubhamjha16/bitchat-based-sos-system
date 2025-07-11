@@ -83,4 +83,50 @@ class NotificationService {
         
         sendLocalNotification(title: title, body: body, identifier: identifier)
     }
+    
+    // MARK: - SOS Notifications
+    
+    func showSOSNotification(_ sosMessage: SOSMessage) {
+        let title = "🆘 EMERGENCY - \(sosMessage.type.displayName)"
+        let body = "\(sosMessage.description) from \(sosMessage.senderName)"
+        let identifier = "sos-\(sosMessage.id)"
+        
+        // Use a more urgent sound for critical messages
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = sosMessage.urgency == .critical ? .defaultCritical : .default
+        content.categoryIdentifier = "SOS_CATEGORY"
+        content.userInfo = [
+            "sosID": sosMessage.id,
+            "sosType": sosMessage.type.rawValue,
+            "urgency": sosMessage.urgency.rawValue
+        ]
+        
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: nil
+        )
+        
+        UNUserNotificationCenter.current().add(request) { _ in
+            // Notification added
+        }
+    }
+    
+    func showSOSResponseNotification(_ sosResponse: SOSResponse) {
+        let title = "🚨 SOS Response - \(sosResponse.responseType.displayName)"
+        let body = "\(sosResponse.message) from \(sosResponse.responderName)"
+        let identifier = "sos-response-\(sosResponse.id)"
+        
+        sendLocalNotification(title: title, body: body, identifier: identifier)
+    }
+    
+    func showEmergencyServiceNotification(_ announcement: EmergencyServiceAnnouncement) {
+        let title = "🚑 Emergency Service Available"
+        let body = "\(announcement.serviceName) - \(announcement.serviceType.displayName)"
+        let identifier = "emergency-service-\(announcement.id)"
+        
+        sendLocalNotification(title: title, body: body, identifier: identifier)
+    }
 }

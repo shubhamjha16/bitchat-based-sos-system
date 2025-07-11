@@ -347,6 +347,21 @@ struct ContentView: View {
                                 viewModel.saveNickname()
                             }
                     }
+                    
+                    // SOS Button
+                    Button(action: {
+                        viewModel.showSOSInterface = true
+                    }) {
+                        Text("🆘")
+                            .font(.system(size: 18))
+                            .foregroundColor(Color.red)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Emergency SOS")
+                    .accessibilityHint("Tap to send emergency SOS message")
+                    .sheet(isPresented: $viewModel.showSOSInterface) {
+                        SOSView()
+                    }
                 }
                 
                 Spacer()
