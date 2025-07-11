@@ -77,6 +77,9 @@ enum MessageType: UInt8 {
     case deliveryAck = 0x0A  // Acknowledge message received
     case deliveryStatusRequest = 0x0B  // Request delivery status update
     case readReceipt = 0x0C  // Message has been read/viewed
+    case sosMessage = 0x0D  // Emergency SOS message
+    case sosResponse = 0x0E  // Response to SOS message
+    case emergencyServiceAnnounce = 0x0F  // Announce emergency service availability
 }
 
 // Special recipient ID for broadcast messages
@@ -209,6 +212,264 @@ enum DeliveryStatus: Codable, Equatable {
     }
 }
 
+// SOS message types
+enum SOSType: String, Codable, CaseIterable {
+    case medical = "medical"
+    case fire = "fire"
+    case police = "police"
+    case accident = "accident"
+    case natural_disaster = "natural_disaster"
+    case personal_safety = "personal_safety"
+    case other = "other"
+    
+    var displayName: String {
+        switch self {
+        case .medical:
+            return "Medical Emergency"
+        case .fire:
+            return "Fire Emergency"
+        case .police:
+            return "Police Emergency"
+        case .accident:
+            return "Accident"
+        case .natural_disaster:
+            return "Natural Disaster"
+        case .personal_safety:
+            return "Personal Safety"
+        case .other:
+            return "Other Emergency"
+        }
+    }
+    
+    var emoji: String {
+        switch self {
+        case .medical:
+            return "🚑"
+        case .fire:
+            return "🚒"
+        case .police:
+            return "🚓"
+        case .accident:
+            return "🚨"
+        case .natural_disaster:
+            return "🌪️"
+        case .personal_safety:
+            return "🆘"
+        case .other:
+            return "⚠️"
+        }
+    }
+}
+
+// SOS message structure
+struct SOSMessage: Codable, Equatable {
+    let id: String
+    let type: SOSType
+    let urgency: UrgencyLevel
+    let location: LocationData?
+    let description: String
+    let senderName: String
+    let senderID: String
+    let timestamp: Date
+    let isActive: Bool // Whether the emergency is still active
+    let contactInfo: String? // Optional contact information
+    let additionalInfo: [String: String]? // Additional emergency-specific info
+    
+    init(
+        id: String? = nil,
+        type: SOSType,
+        urgency: UrgencyLevel,
+        location: LocationData? = nil,
+        description: String,
+        senderName: String,
+        senderID: String,
+        isActive: Bool = true,
+        contactInfo: String? = nil,
+        additionalInfo: [String: String]? = nil
+    ) {
+        self.id = id ?? UUID().uuidString
+        self.type = type
+        self.urgency = urgency
+        self.location = location
+        self.description = description
+        self.senderName = senderName
+        self.senderID = senderID
+        self.timestamp = Date()
+        self.isActive = isActive
+        self.contactInfo = contactInfo
+        self.additionalInfo = additionalInfo
+    }
+}
+
+// Urgency levels for SOS messages
+enum UrgencyLevel: String, Codable, CaseIterable {
+    case low = "low"
+    case medium = "medium"
+    case high = "high"
+    case critical = "critical"
+    
+    var displayName: String {
+        switch self {
+        case .low:
+            return "Low"
+        case .medium:
+            return "Medium"
+        case .high:
+            return "High"
+        case .critical:
+            return "Critical"
+        }
+    }
+    
+    var color: String {
+        switch self {
+        case .low:
+            return "yellow"
+        case .medium:
+            return "orange"
+        case .high:
+            return "red"
+        case .critical:
+            return "darkred"
+        }
+    }
+}
+
+// Location data for SOS messages
+struct LocationData: Codable, Equatable {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double?
+    let accuracy: Double?
+    let timestamp: Date
+    let address: String? // Human-readable address if available
+    let landmark: String? // Nearby landmark description
+    
+    init(
+        latitude: Double,
+        longitude: Double,
+        altitude: Double? = nil,
+        accuracy: Double? = nil,
+        address: String? = nil,
+        landmark: String? = nil
+    ) {
+        self.latitude = latitude
+        self.longitude = longitude
+        self.altitude = altitude
+        self.accuracy = accuracy
+        self.timestamp = Date()
+        self.address = address
+        self.landmark = landmark
+    }
+}
+
+// SOS Response message
+struct SOSResponse: Codable, Equatable {
+    let id: String
+    let originalSOSID: String
+    let responderName: String
+    let responderID: String
+    let responseType: ResponseType
+    let message: String
+    let timestamp: Date
+    let eta: Date? // Estimated time of arrival
+    let capabilities: [String]? // What the responder can help with
+    
+    init(
+        id: String? = nil,
+        originalSOSID: String,
+        responderName: String,
+        responderID: String,
+        responseType: ResponseType,
+        message: String,
+        eta: Date? = nil,
+        capabilities: [String]? = nil
+    ) {
+        self.id = id ?? UUID().uuidString
+        self.originalSOSID = originalSOSID
+        self.responderName = responderName
+        self.responderID = responderID
+        self.responseType = responseType
+        self.message = message
+        self.timestamp = Date()
+        self.eta = eta
+        self.capabilities = capabilities
+    }
+}
+
+// Response types
+enum ResponseType: String, Codable, CaseIterable {
+    case acknowledged = "acknowledged"
+    case enroute = "enroute"
+    case onsite = "onsite"
+    case referral = "referral"
+    case unable = "unable"
+    
+    var displayName: String {
+        switch self {
+        case .acknowledged:
+            return "Acknowledged"
+        case .enroute:
+            return "En Route"
+        case .onsite:
+            return "On Site"
+        case .referral:
+            return "Referring to Others"
+        case .unable:
+            return "Unable to Help"
+        }
+    }
+    
+    var emoji: String {
+        switch self {
+        case .acknowledged:
+            return "👍"
+        case .enroute:
+            return "🚗"
+        case .onsite:
+            return "📍"
+        case .referral:
+            return "🔄"
+        case .unable:
+            return "❌"
+        }
+    }
+}
+
+// Emergency service announcement
+struct EmergencyServiceAnnouncement: Codable, Equatable {
+    let id: String
+    let serviceType: SOSType
+    let serviceName: String
+    let serviceID: String
+    let location: LocationData?
+    let capabilities: [String]
+    let isActive: Bool
+    let timestamp: Date
+    let contactInfo: String?
+    
+    init(
+        id: String? = nil,
+        serviceType: SOSType,
+        serviceName: String,
+        serviceID: String,
+        location: LocationData? = nil,
+        capabilities: [String] = [],
+        isActive: Bool = true,
+        contactInfo: String? = nil
+    ) {
+        self.id = id ?? UUID().uuidString
+        self.serviceType = serviceType
+        self.serviceName = serviceName
+        self.serviceID = serviceID
+        self.location = location
+        self.capabilities = capabilities
+        self.isActive = isActive
+        self.timestamp = Date()
+        self.contactInfo = contactInfo
+    }
+}
+
 struct BitchatMessage: Codable, Equatable {
     let id: String
     let sender: String
@@ -225,7 +486,31 @@ struct BitchatMessage: Codable, Equatable {
     let isEncrypted: Bool  // Flag to indicate if content is encrypted
     var deliveryStatus: DeliveryStatus? // Delivery tracking
     
-    init(id: String? = nil, sender: String, content: String, timestamp: Date, isRelay: Bool, originalSender: String? = nil, isPrivate: Bool = false, recipientNickname: String? = nil, senderPeerID: String? = nil, mentions: [String]? = nil, channel: String? = nil, encryptedContent: Data? = nil, isEncrypted: Bool = false, deliveryStatus: DeliveryStatus? = nil) {
+    // SOS-specific fields
+    let sosMessage: SOSMessage?
+    let sosResponse: SOSResponse?
+    let emergencyServiceAnnouncement: EmergencyServiceAnnouncement?
+    let isEmergency: Bool
+    
+    init(
+        id: String? = nil,
+        sender: String,
+        content: String,
+        timestamp: Date,
+        isRelay: Bool,
+        originalSender: String? = nil,
+        isPrivate: Bool = false,
+        recipientNickname: String? = nil,
+        senderPeerID: String? = nil,
+        mentions: [String]? = nil,
+        channel: String? = nil,
+        encryptedContent: Data? = nil,
+        isEncrypted: Bool = false,
+        deliveryStatus: DeliveryStatus? = nil,
+        sosMessage: SOSMessage? = nil,
+        sosResponse: SOSResponse? = nil,
+        emergencyServiceAnnouncement: EmergencyServiceAnnouncement? = nil
+    ) {
         self.id = id ?? UUID().uuidString
         self.sender = sender
         self.content = content
@@ -240,6 +525,46 @@ struct BitchatMessage: Codable, Equatable {
         self.encryptedContent = encryptedContent
         self.isEncrypted = isEncrypted
         self.deliveryStatus = deliveryStatus ?? (isPrivate ? .sending : nil)
+        self.sosMessage = sosMessage
+        self.sosResponse = sosResponse
+        self.emergencyServiceAnnouncement = emergencyServiceAnnouncement
+        self.isEmergency = sosMessage != nil || sosResponse != nil || emergencyServiceAnnouncement != nil
+    }
+    
+    // Convenience initializer for SOS messages
+    init(sosMessage: SOSMessage, sender: String, senderPeerID: String?) {
+        self.init(
+            sender: sender,
+            content: "🆘 \(sosMessage.type.emoji) \(sosMessage.type.displayName): \(sosMessage.description)",
+            timestamp: sosMessage.timestamp,
+            isRelay: false,
+            senderPeerID: senderPeerID,
+            sosMessage: sosMessage
+        )
+    }
+    
+    // Convenience initializer for SOS responses
+    init(sosResponse: SOSResponse, sender: String, senderPeerID: String?) {
+        self.init(
+            sender: sender,
+            content: "🚨 Response: \(sosResponse.responseType.emoji) \(sosResponse.responseType.displayName) - \(sosResponse.message)",
+            timestamp: sosResponse.timestamp,
+            isRelay: false,
+            senderPeerID: senderPeerID,
+            sosResponse: sosResponse
+        )
+    }
+    
+    // Convenience initializer for emergency service announcements
+    init(emergencyServiceAnnouncement: EmergencyServiceAnnouncement, sender: String, senderPeerID: String?) {
+        self.init(
+            sender: sender,
+            content: "🚑 Emergency Service: \(emergencyServiceAnnouncement.serviceName) - \(emergencyServiceAnnouncement.serviceType.displayName)",
+            timestamp: emergencyServiceAnnouncement.timestamp,
+            isRelay: false,
+            senderPeerID: senderPeerID,
+            emergencyServiceAnnouncement: emergencyServiceAnnouncement
+        )
     }
 }
 
@@ -260,6 +585,11 @@ protocol BitchatDelegate: AnyObject {
     func didReceiveDeliveryAck(_ ack: DeliveryAck)
     func didReceiveReadReceipt(_ receipt: ReadReceipt)
     func didUpdateMessageDeliveryStatus(_ messageID: String, status: DeliveryStatus)
+    
+    // SOS-specific methods
+    func didReceiveSOSMessage(_ sosMessage: SOSMessage)
+    func didReceiveSOSResponse(_ sosResponse: SOSResponse)
+    func didReceiveEmergencyServiceAnnouncement(_ announcement: EmergencyServiceAnnouncement)
 }
 
 // Provide default implementation to make it effectively optional
@@ -294,6 +624,19 @@ extension BitchatDelegate {
     }
     
     func didUpdateMessageDeliveryStatus(_ messageID: String, status: DeliveryStatus) {
+        // Default empty implementation
+    }
+    
+    // Default implementations for SOS methods
+    func didReceiveSOSMessage(_ sosMessage: SOSMessage) {
+        // Default empty implementation
+    }
+    
+    func didReceiveSOSResponse(_ sosResponse: SOSResponse) {
+        // Default empty implementation
+    }
+    
+    func didReceiveEmergencyServiceAnnouncement(_ announcement: EmergencyServiceAnnouncement) {
         // Default empty implementation
     }
 }
